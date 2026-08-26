@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+
+# YOLO model weights
+*.pt
+
+# Video files
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# YOLO/generated output
+runs/
+output/
+results/
+
+# IDE/editor files
+.vscode/
