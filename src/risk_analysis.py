@@ -9,8 +9,9 @@ from ultralytics import YOLO
 MODEL_PATH = "yolo11n.pt"
 VIDEO_PATH = "data/tracking_test.mp4"
 
-# Distance below which two objects may be considered close
-DANGER_DISTANCE = 180
+# Pixel-distance thresholds
+HIGH_RISK_DISTANCE = 120
+MEDIUM_RISK_DISTANCE = 250
 
 # -----------------------------
 # LOAD MODEL AND VIDEO
@@ -98,6 +99,8 @@ while True:
             # VELOCITY
             # -----------------------------
 
+            velocity = 0.0
+
             if track_id in previous_positions:
 
                 previous_x, previous_y = previous_positions[track_id]
@@ -160,14 +163,20 @@ while True:
                 (y1 - y2) ** 2
             )
 
-            # Make a consistent pair ID
+            # -----------------------------
+            # PAIR ID
+            # -----------------------------
+
             pair = tuple(
                 sorted([id1, id2])
             )
 
+            # -----------------------------
+            # APPROACHING DETECTION
+            # -----------------------------
+
             approaching = False
 
-            # Compare with previous frame
             if pair in previous_distances:
 
                 previous_distance = previous_distances[pair]
@@ -178,6 +187,22 @@ while True:
             previous_distances[pair] = distance
 
             # -----------------------------
+            # RISK CLASSIFICATION
+            # -----------------------------
+
+            if distance < HIGH_RISK_DISTANCE and approaching:
+
+                risk_level = "HIGH"
+
+            elif distance < MEDIUM_RISK_DISTANCE and approaching:
+
+                risk_level = "MEDIUM"
+
+            else:
+
+                risk_level = "LOW"
+
+            # -----------------------------
             # PRINT DISTANCE
             # -----------------------------
 
@@ -186,21 +211,31 @@ while True:
                 f"Distance | "
                 f"ID {id1} ({class1}) <-> "
                 f"ID {id2} ({class2}) = "
-                f"{distance:.2f} px"
+                f"{distance:.2f} px | "
+                f"Approaching: {approaching} | "
+                f"Risk: {risk_level}"
             )
 
             # -----------------------------
-            # RISK DETECTION
+            # WARNING
             # -----------------------------
 
-            if approaching and distance < DANGER_DISTANCE:
+            if risk_level == "HIGH":
 
                 print(
-                    f"⚠️ POTENTIAL RISK | "
+                    f"⚠️ HIGH RISK | "
                     f"ID {id1} ({class1}) <-> "
                     f"ID {id2} ({class2}) | "
-                    f"Distance: {distance:.2f} px | "
-                    f"Approaching: YES"
+                    f"Distance: {distance:.2f} px"
+                )
+
+            elif risk_level == "MEDIUM":
+
+                print(
+                    f"⚠️ MEDIUM RISK | "
+                    f"ID {id1} ({class1}) <-> "
+                    f"ID {id2} ({class2}) | "
+                    f"Distance: {distance:.2f} px"
                 )
 
 # -----------------------------
