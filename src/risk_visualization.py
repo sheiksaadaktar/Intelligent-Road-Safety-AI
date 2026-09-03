@@ -1,6 +1,5 @@
 import cv2
 import math
-import os
 from ultralytics import YOLO
 
 # ============================================================
@@ -9,37 +8,33 @@ from ultralytics import YOLO
 
 MODEL_PATH = "yolo11n.pt"
 VIDEO_PATH = "data/tracking_test.mp4"
-OUTPUT_PATH = "output/risk_analysis.mp4"
 
-# Risk thresholds in pixels
-HIGH_RISK_DISTANCE = 100
-MEDIUM_RISK_DISTANCE = 250
+# Distance thresholds in pixels
+CRITICAL_DISTANCE = 140
+HIGH_DISTANCE = 200
+MEDIUM_DISTANCE = 280
 
-# Velocity thresholds in pixels/sec
-HIGH_SPEED = 500
-MEDIUM_SPEED = 250
+# Closing speed thresholds in pixels/sec
+HIGH_CLOSING_SPEED = 100
+CRITICAL_CLOSING_SPEED = 180
 
-# Number of movement measurements used for smoothing
-SMOOTHING_WINDOW = 5
+# TTC thresholds in seconds
+CRITICAL_TTC = 0.8
+HIGH_TTC = 1.5
+MEDIUM_TTC = 3.0
+
+# Number of previous measurements used for smoothing
+HISTORY_SIZE = 5
+
+# Ignore extremely large one-frame closing-speed spikes
+MAX_REASONABLE_CLOSING_SPEED = 1000
 
 
 # ============================================================
-# CREATE OUTPUT DIRECTORY
-# ============================================================
-
-os.makedirs("output", exist_ok=True)
-
-
-# ============================================================
-# LOAD MODEL
+# LOAD MODEL AND VIDEO
 # ============================================================
 
 model = YOLO(MODEL_PATH)
-
-
-# ============================================================
-# OPEN VIDEO
-# ============================================================
 
 video = cv2.VideoCapture(VIDEO_PATH)
 
@@ -49,30 +44,7 @@ if not video.isOpened():
 
 fps = video.get(cv2.CAP_PROP_FPS)
 
-width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
 print(f"Video FPS: {fps}")
-print(f"Video resolution: {width} x {height}")
-
-
-# ============================================================
-# VIDEO WRITER
-# ============================================================
-
-fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-writer = cv2.VideoWriter(
-    OUTPUT_PATH,
-    fourcc,
-    fps,
-    (width, height)
-)
-
-if not writer.isOpened():
-    print("Could not create output video.")
-    video.release()
-    exit()
 
 
 # ============================================================
@@ -80,15 +52,20 @@ if not writer.isOpened():
 # ============================================================
 
 previous_positions = {}
+
 movement_history = {}
+
 previous_distances = {}
+
+closing_speed_history = {}
+
+
+frame_number = 0
 
 
 # ============================================================
 # MAIN LOOP
 # ============================================================
-
-frame_number = 0
 
 while True:
 
@@ -98,10 +75,6 @@ while True:
         break
 
     frame_number += 1
-
-    # --------------------------------------------------------
-    # YOLO TRACKING
-    # --------------------------------------------------------
 
     results = model.track(
         frame,
@@ -114,23 +87,15 @@ while True:
     objects = []
 
 
-    # --------------------------------------------------------
-    # PROCESS DETECTED OBJECTS
-    # --------------------------------------------------------
+    # ========================================================
+    # OBJECT DETECTION + VELOCITY
+    # ========================================================
 
     if result.boxes.id is not None:
 
-        tracking_ids = (
-            result.boxes.id
-            .int()
-            .cpu()
-            .tolist()
-        )
+        tracking_ids = result.boxes.id.int().cpu().tolist()
 
-        for box, track_id in zip(
-            result.boxes,
-            tracking_ids
-        ):
+        for box, track_id in zip(result.boxes, tracking_ids):
 
             class_id = int(box.cls[0])
             class_name = result.names[class_id]
@@ -148,17 +113,22 @@ while True:
                 center_y
             )
 
-            # ------------------------------------------------
-            # VELOCITY
-            # ------------------------------------------------
 
-            velocity = 0.0
+            # Store object information
+            objects.append({
+                "id": track_id,
+                "class": class_name,
+                "center": current_position
+            })
+
+
+            # =================================================
+            # OBJECT VELOCITY
+            # =================================================
 
             if track_id in previous_positions:
 
-                previous_x, previous_y = (
-                    previous_positions[track_id]
-                )
+                previous_x, previous_y = previous_positions[track_id]
 
                 movement_x = center_x - previous_x
                 movement_y = center_y - previous_y
@@ -168,90 +138,41 @@ while True:
                     movement_y ** 2
                 )
 
+
                 if track_id not in movement_history:
                     movement_history[track_id] = []
 
-                movement_history[track_id].append(
-                    movement
-                )
 
-                if (
-                    len(movement_history[track_id])
-                    > SMOOTHING_WINDOW
-                ):
+                movement_history[track_id].append(movement)
+
+
+                if len(movement_history[track_id]) > HISTORY_SIZE:
                     movement_history[track_id].pop(0)
+
 
                 smoothed_movement = (
                     sum(movement_history[track_id])
                     / len(movement_history[track_id])
                 )
 
+
                 velocity = smoothed_movement * fps
 
-            else:
 
-                movement_history[track_id] = []
+                print(
+                    f"Frame: {frame_number} | "
+                    f"ID: {track_id} | "
+                    f"{class_name} | "
+                    f"Velocity: {velocity:.2f} px/sec"
+                )
 
 
             previous_positions[track_id] = current_position
 
 
-            # ------------------------------------------------
-            # STORE OBJECT
-            # ------------------------------------------------
-
-            objects.append({
-                "id": track_id,
-                "class": class_name,
-                "center": current_position,
-                "bbox": (x1, y1, x2, y2),
-                "velocity": velocity
-            })
-
-
-    # ========================================================
-    # DRAW OBJECT INFORMATION
-    # ========================================================
-
-    for obj in objects:
-
-        track_id = obj["id"]
-        class_name = obj["class"]
-        x1, y1, x2, y2 = obj["bbox"]
-        velocity = obj["velocity"]
-
-        # Draw bounding box
-        cv2.rectangle(
-            frame,
-            (x1, y1),
-            (x2, y2),
-            (255, 255, 255),
-            2
-        )
-
-        # Object label
-        label = (
-            f"ID {track_id} | "
-            f"{class_name} | "
-            f"{velocity:.0f} px/s"
-        )
-
-        cv2.putText(
-            frame,
-            label,
-            (x1, max(y1 - 10, 20)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (255, 255, 255),
-            2
-        )
-
-
     # ========================================================
     # PAIRWISE RISK ANALYSIS
     # ========================================================
-
-    risk_messages = []
 
     for i in range(len(objects)):
 
@@ -260,14 +181,17 @@ while True:
             object1 = objects[i]
             object2 = objects[j]
 
+
             id1 = object1["id"]
             id2 = object2["id"]
 
             class1 = object1["class"]
             class2 = object2["class"]
 
+
             x1, y1 = object1["center"]
             x2, y2 = object2["center"]
+
 
             # ------------------------------------------------
             # DISTANCE
@@ -278,150 +202,180 @@ while True:
                 (y1 - y2) ** 2
             )
 
-            # Consistent pair ID
+
+            # Consistent pair identifier
             pair = tuple(
                 sorted([id1, id2])
             )
 
-            approaching = False
+
+            # ------------------------------------------------
+            # CLOSING SPEED
+            # ------------------------------------------------
+
+            closing_speed = 0.0
+
 
             if pair in previous_distances:
 
-                previous_distance = (
-                    previous_distances[pair]
+                previous_distance = previous_distances[pair]
+
+                distance_change = (
+                    previous_distance - distance
                 )
 
-                if distance < previous_distance:
-                    approaching = True
+                closing_speed = distance_change * fps
+
 
             previous_distances[pair] = distance
 
 
             # ------------------------------------------------
-            # RISK LEVEL
+            # FILTER EXTREME ONE-FRAME SPIKES
             # ------------------------------------------------
 
-            risk = "LOW"
+            if closing_speed < 0:
 
-            if (
-                approaching
-                and distance <= HIGH_RISK_DISTANCE
-            ):
+                closing_speed = 0
+
+
+            if closing_speed > MAX_REASONABLE_CLOSING_SPEED:
+
+                closing_speed = MAX_REASONABLE_CLOSING_SPEED
+
+
+            # ------------------------------------------------
+            # SMOOTH CLOSING SPEED
+            # ------------------------------------------------
+
+            if pair not in closing_speed_history:
+
+                closing_speed_history[pair] = []
+
+
+            closing_speed_history[pair].append(
+                closing_speed
+            )
+
+
+            if len(closing_speed_history[pair]) > HISTORY_SIZE:
+
+                closing_speed_history[pair].pop(0)
+
+
+            smoothed_closing_speed = (
+                sum(closing_speed_history[pair])
+                / len(closing_speed_history[pair])
+            )
+
+
+            # ------------------------------------------------
+            # TIME TO COLLISION
+            # ------------------------------------------------
+
+            if smoothed_closing_speed > 0:
+
+                ttc = (
+                    distance /
+                    smoothed_closing_speed
+                )
+
+            else:
+
+                ttc = float("inf")
+
+
+            # =================================================
+            # RISK SCORE
+            # =================================================
+
+            score = 0
+
+
+            # Distance contribution
+            if distance <= CRITICAL_DISTANCE:
+
+                score += 40
+
+            elif distance <= HIGH_DISTANCE:
+
+                score += 30
+
+            elif distance <= MEDIUM_DISTANCE:
+
+                score += 20
+
+
+            # Closing speed contribution
+            if smoothed_closing_speed >= CRITICAL_CLOSING_SPEED:
+
+                score += 30
+
+            elif smoothed_closing_speed >= HIGH_CLOSING_SPEED:
+
+                score += 20
+
+            elif smoothed_closing_speed > 0:
+
+                score += 10
+
+
+            # TTC contribution
+            if ttc <= CRITICAL_TTC:
+
+                score += 30
+
+            elif ttc <= HIGH_TTC:
+
+                score += 20
+
+            elif ttc <= MEDIUM_TTC:
+
+                score += 10
+
+
+            # =================================================
+            # RISK LEVEL
+            # =================================================
+
+            if score >= 80:
+
+                risk = "CRITICAL"
+
+            elif score >= 60:
 
                 risk = "HIGH"
 
-            elif (
-                approaching
-                and distance <= MEDIUM_RISK_DISTANCE
-            ):
+            elif score >= 30:
 
                 risk = "MEDIUM"
 
+            else:
 
-            # ------------------------------------------------
-            # DRAW CONNECTION
-            # ------------------------------------------------
-
-            if distance <= MEDIUM_RISK_DISTANCE:
-
-                center1 = (
-                    int(x1),
-                    int(y1)
-                )
-
-                center2 = (
-                    int(x2),
-                    int(y2)
-                )
-
-                cv2.line(
-                    frame,
-                    center1,
-                    center2,
-                    (255, 255, 255),
-                    2
-                )
-
-                # Distance text
-                mid_x = int((x1 + x2) / 2)
-                mid_y = int((y1 + y2) / 2)
-
-                distance_text = (
-                    f"{distance:.0f}px"
-                )
-
-                cv2.putText(
-                    frame,
-                    distance_text,
-                    (mid_x, mid_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 255, 255),
-                    2
-                )
+                risk = "LOW"
 
 
-            # ------------------------------------------------
-            # RISK MESSAGE
-            # ------------------------------------------------
+            # =================================================
+            # OUTPUT
+            # =================================================
 
             if risk != "LOW":
 
-                risk_messages.append(
-                    f"{risk} RISK: "
-                    f"ID {id1} <-> ID {id2} "
-                    f"({distance:.0f}px)"
+                print(
+                    f"Frame: {frame_number} | "
+                    f"{risk} RISK | "
+                    f"ID {id1} ({class1}) <-> "
+                    f"ID {id2} ({class2}) | "
+                    f"Distance: {distance:.2f}px | "
+                    f"Closing: {smoothed_closing_speed:.2f}px/s | "
+                    f"TTC: {ttc:.2f}s | "
+                    f"Score: {score}"
                 )
 
 
     # ========================================================
-    # DISPLAY RISK WARNINGS
-    # ========================================================
-
-    y_position = 35
-
-    if len(risk_messages) > 0:
-
-        for message in risk_messages:
-
-            cv2.putText(
-                frame,
-                message,
-                (20, y_position),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2
-            )
-
-            y_position += 30
-
-
-    # ========================================================
-    # FRAME INFORMATION
-    # ========================================================
-
-    cv2.putText(
-        frame,
-        f"Frame: {frame_number}",
-        (20, height - 20),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (255, 255, 255),
-        2
-    )
-
-
-    # ========================================================
-    # WRITE FRAME
-    # ========================================================
-
-    writer.write(frame)
-
-
-    # --------------------------------------------------------
     # PROGRESS
-    # --------------------------------------------------------
+    # ========================================================
 
     if frame_number % 50 == 0:
 
@@ -435,10 +389,8 @@ while True:
 # ============================================================
 
 video.release()
-writer.release()
 
 print()
 print("===================================")
-print("Risk visualization complete.")
-print(f"Output saved to: {OUTPUT_PATH}")
+print("Risk analysis complete.")
 print("===================================")
