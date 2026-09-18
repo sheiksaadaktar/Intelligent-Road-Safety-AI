@@ -1,4 +1,6 @@
-﻿import cv2
+﻿from pathlib import Path
+import json
+import cv2
 import numpy as np
 
 from collections import defaultdict, deque
@@ -1192,6 +1194,45 @@ def main():
     video.release()
 
     event_manager.finalize_all()
+
+    # ========================================================
+    # V5.3 MACHINE-READABLE EVENT EXPORT
+    # ========================================================
+
+
+    event_output_path = "output/confirmed_risk_events_v53.json"
+
+    Path("output").mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    events = event_manager.completed_events
+
+    event_export = {
+        "version": "V5.3",
+        "fps": fps,
+        "video_path": VIDEO_PATH,
+        "confirmed_event_count": len(events),
+        "events": events,
+    }
+
+    with open(
+        event_output_path,
+        "w",
+        encoding="utf-8",
+    ) as event_file:
+
+        json.dump(
+            event_export,
+            event_file,
+            indent=2,
+        )
+
+    print(
+        f"Confirmed events exported to: "
+        f"{event_output_path}"
+    )
 
     print()
     print("=" * 70)
