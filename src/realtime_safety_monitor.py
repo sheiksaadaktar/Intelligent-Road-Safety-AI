@@ -15,6 +15,8 @@ from risk_analysis import (
     calculate_risk,
 )
 
+from live_alert_pipeline import LiveAlertPipeline
+
 
 # ============================================================
 # REAL-TIME SAFETY MONITOR
@@ -31,15 +33,9 @@ WINDOW_NAME = (
 # DISPLAY
 # ============================================================
 
-# Processing remains at the original video resolution.
-# Only the displayed frame is resized.
-
 DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 720
 
-# The frame is displayed at approximately 2/3 of the
-# original 1920x1080 resolution, so UI text is enlarged
-# before display to remain readable.
 UI_SCALE = 1.45
 
 
@@ -60,13 +56,6 @@ RISK_COLORS = {
     "HIGH": (0, 140, 255),
     "CRITICAL": (0, 0, 255),
 }
-
-
-# ============================================================
-# ALERT COOLDOWN
-# ============================================================
-
-ALERT_COOLDOWN_FRAMES = 30
 
 
 # ============================================================
@@ -139,52 +128,59 @@ def resize_for_display(frame):
 
 
 # ============================================================
-# CONSOLE ALERT
+# LIVE ALERT CONSOLE
 # ============================================================
 
-def print_alert(
-    frame_number,
-    id1,
-    id2,
-    risk,
-    score,
-    metrics,
-):
-
-    tca_text = format_tca(
-        metrics["tca"]
-    )
+def print_live_alert(alert):
 
     print("")
     print("!" * 70)
-    print("ROAD SAFETY ALERT")
-    print(f"Frame: {frame_number}")
-    print(f"Objects: ID{id1} <-> ID{id2}")
-    print(f"Risk: {risk}")
-    print(f"Score: {score}")
+    print("CONFIRMED LIVE ROAD SAFETY ALERT")
+    print(f"Alert ID: {alert['alert_id']}")
+    print(f"Objects: ID{alert['pair'][0]} <-> ID{alert['pair'][1]}")
+    print(f"Alert level: {alert['alert_level']}")
+    print(f"Priority: {alert['priority']}")
+    print(f"State: {alert['state']}")
+    print(f"Peak risk: {alert['risk']['peak_risk']}")
+    print(f"Peak score: {alert['risk']['peak_score']}")
+
+    trajectory = alert["trajectory_evidence"]
 
     print(
-        f"Distance: "
-        f"{metrics['distance']:.2f} px"
+        f"Minimum distance: "
+        f"{trajectory['min_distance_pixels']:.2f} px"
     )
 
     print(
-        f"Predicted distance: "
-        f"{metrics['predicted_distance']:.2f} px"
+        f"Minimum predicted distance: "
+        f"{trajectory['min_predicted_distance_pixels']:.2f} px"
     )
 
     print(
-        f"Approach speed: "
-        f"{metrics['approach_speed']:.2f} px/s"
+        f"Maximum approach speed: "
+        f"{trajectory['max_approach_speed_pixels_per_second']:.2f} px/s"
     )
 
     print(
-        f"TCA: {tca_text}"
+        f"Minimum TCA: "
+        f"{trajectory['min_tca_seconds']:.2f} s"
     )
 
     print(
-        f"Convergence: "
-        f"{metrics['convergence']:.2f}"
+        f"Maximum convergence: "
+        f"{trajectory['max_convergence']:.2f}"
+    )
+
+    confirmation = alert["confirmation"]
+
+    print(
+        f"Strong observations: "
+        f"{confirmation['strong_observations']}"
+    )
+
+    print(
+        f"Strong frames: "
+        f"{confirmation['strong_frames']}"
     )
 
     print("!" * 70)
@@ -199,6 +195,7 @@ def draw_header(
     frame_number,
     highest_risk,
     highest_score,
+    live_alert_count,
 ):
 
     color = risk_color(
@@ -220,7 +217,6 @@ def draw_header(
         -1,
     )
 
-    # Main title
     cv2.putText(
         frame,
         "INTELLIGENT ROAD SAFETY AI",
@@ -232,7 +228,6 @@ def draw_header(
         cv2.LINE_AA,
     )
 
-    # Subtitle
     cv2.putText(
         frame,
         "REAL-TIME TRAJECTORY SAFETY MONITOR",
@@ -244,13 +239,13 @@ def draw_header(
         cv2.LINE_AA,
     )
 
-    # Current status
     cv2.putText(
         frame,
         (
             f"Frame: {frame_number}    "
             f"Highest Risk: {highest_risk}    "
-            f"Score: {highest_score}"
+            f"Score: {highest_score}    "
+            f"Live Alerts: {live_alert_count}"
         ),
         (25, 103),
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -298,7 +293,6 @@ def draw_risk_panel(
         + 20
     )
 
-    # Keep panel inside frame.
     panel_height = min(
         panel_height,
         height - panel_y - 20,
@@ -329,7 +323,6 @@ def draw_risk_panel(
         frame,
     )
 
-    # Panel title
     cv2.putText(
         frame,
         "CURRENT RISK PAIRS",
@@ -362,10 +355,6 @@ def draw_risk_panel(
 
         return
 
-    # --------------------------------------------------------
-    # Risk entries
-    # --------------------------------------------------------
-
     for index, item in enumerate(
         visible_pairs
     ):
@@ -388,7 +377,6 @@ def draw_risk_panel(
             risk
         )
 
-        # Separator
         cv2.line(
             frame,
             (
@@ -403,7 +391,6 @@ def draw_risk_panel(
             1,
         )
 
-        # Risk + objects + score
         cv2.putText(
             frame,
             (
@@ -422,7 +409,6 @@ def draw_risk_panel(
             cv2.LINE_AA,
         )
 
-        # Distance
         cv2.putText(
             frame,
             (
@@ -442,7 +428,6 @@ def draw_risk_panel(
             cv2.LINE_AA,
         )
 
-        # Approach + TCA
         cv2.putText(
             frame,
             (
@@ -462,7 +447,6 @@ def draw_risk_panel(
             cv2.LINE_AA,
         )
 
-        # Convergence
         cv2.putText(
             frame,
             (
@@ -479,6 +463,104 @@ def draw_risk_panel(
             1,
             cv2.LINE_AA,
         )
+
+
+# ============================================================
+# DRAW LIVE ALERT STATUS
+# ============================================================
+
+def draw_live_alert_status(
+    frame,
+    latest_alert,
+):
+
+    if latest_alert is None:
+        return
+
+    height, width = frame.shape[:2]
+
+    alert_level = latest_alert["alert_level"]
+
+    if alert_level == "IMMEDIATE_ALERT":
+        color = RISK_COLORS["CRITICAL"]
+    elif alert_level == "PRIORITY_ALERT":
+        color = RISK_COLORS["HIGH"]
+    else:
+        color = RISK_COLORS["MEDIUM"]
+
+    box_width = 520
+    box_height = 82
+
+    x = 20
+    y = 135
+
+    overlay = frame.copy()
+
+    cv2.rectangle(
+        overlay,
+        (x, y),
+        (
+            x + box_width,
+            y + box_height,
+        ),
+        (10, 10, 10),
+        -1,
+    )
+
+    cv2.addWeighted(
+        overlay,
+        0.90,
+        frame,
+        0.10,
+        0,
+        frame,
+    )
+
+    cv2.rectangle(
+        frame,
+        (x, y),
+        (
+            x + box_width,
+            y + box_height,
+        ),
+        color,
+        2,
+    )
+
+    cv2.putText(
+        frame,
+        (
+            f"{alert_level}  "
+            f"{latest_alert['alert_id']}"
+        ),
+        (
+            x + 15,
+            y + 31,
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.60 * UI_SCALE,
+        color,
+        2,
+        cv2.LINE_AA,
+    )
+
+    cv2.putText(
+        frame,
+        (
+            f"ID{latest_alert['pair'][0]} <-> "
+            f"ID{latest_alert['pair'][1]}   "
+            f"Score: {latest_alert['risk']['peak_score']}"
+        ),
+        (
+            x + 15,
+            y + 62,
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48 * UI_SCALE,
+        (240, 240, 240),
+        1,
+        cv2.LINE_AA,
+    )
 
 
 # ============================================================
@@ -568,6 +650,22 @@ def main():
         f"Source FPS: {fps:.2f}"
     )
 
+    # --------------------------------------------------------
+    # Live alert pipeline
+    # --------------------------------------------------------
+
+    live_alert_pipeline = LiveAlertPipeline(
+        fps=fps
+    )
+
+    print(
+        "Live alert pipeline: ENABLED"
+    )
+
+    print(
+        "Temporal confirmation: ENABLED"
+    )
+
     print("")
 
     print(
@@ -592,13 +690,9 @@ def main():
         )
     )
 
-    # --------------------------------------------------------
-    # Alert state
-    # --------------------------------------------------------
-
-    last_alert_frame = {}
-
     frame_number = 0
+
+    latest_live_alert = None
 
     # --------------------------------------------------------
     # Window setup
@@ -752,6 +846,8 @@ def main():
 
         risk_pairs = []
 
+        observed_pairs = set()
+
         highest_risk = "LOW"
         highest_score = 0
 
@@ -806,6 +902,21 @@ def main():
                 ):
                     continue
 
+                pair = tuple(
+                    sorted(
+                        (
+                            id1,
+                            id2,
+                        )
+                    )
+                )
+
+                # Every valid pair is observed by the temporal
+                # confirmation system, including LOW-risk pairs.
+                observed_pairs.add(
+                    pair
+                )
+
                 # ------------------------------------------------
                 # Shared trajectory model
                 # ------------------------------------------------
@@ -822,6 +933,30 @@ def main():
                 risk, score = calculate_risk(
                     metrics
                 )
+
+                # ------------------------------------------------
+                # Temporal live alert pipeline
+                # ------------------------------------------------
+
+                alert_generated = (
+                    live_alert_pipeline.observe(
+                        frame_number=frame_number,
+                        pair=pair,
+                        risk=risk,
+                        score=score,
+                        metrics=metrics,
+                    )
+                )
+
+                if alert_generated:
+
+                    latest_live_alert = (
+                        live_alert_pipeline.alerts[-1]
+                    )
+
+                    print_live_alert(
+                        latest_live_alert
+                    )
 
                 # ------------------------------------------------
                 # Highest risk
@@ -845,7 +980,7 @@ def main():
                     highest_score = score
 
                 # ------------------------------------------------
-                # Keep risk pairs
+                # Keep risk pairs for display
                 # ------------------------------------------------
 
                 if risk != "LOW":
@@ -866,49 +1001,26 @@ def main():
                         }
                     )
 
-                    # ------------------------------------------------
-                    # Console alert
-                    # ------------------------------------------------
+        # ----------------------------------------------------
+        # Inform temporal engine about missing pairs
+        # ----------------------------------------------------
 
-                    if risk in (
-                        "HIGH",
-                        "CRITICAL",
-                    ):
+        completed_alerts = (
+            live_alert_pipeline.mark_missing_pairs(
+                frame_number=frame_number,
+                observed_pairs=observed_pairs,
+            )
+        )
 
-                        pair = tuple(
-                            sorted(
-                                (
-                                    id1,
-                                    id2,
-                                )
-                            )
-                        )
+        if completed_alerts:
 
-                        previous_alert_frame = (
-                            last_alert_frame.get(
-                                pair,
-                                -10**9,
-                            )
-                        )
+            latest_live_alert = (
+                live_alert_pipeline.alerts[-1]
+            )
 
-                        if (
-                            frame_number
-                            - previous_alert_frame
-                            >= ALERT_COOLDOWN_FRAMES
-                        ):
-
-                            print_alert(
-                                frame_number,
-                                id1,
-                                id2,
-                                risk,
-                                score,
-                                metrics,
-                            )
-
-                            last_alert_frame[
-                                pair
-                            ] = frame_number
+            print_live_alert(
+                latest_live_alert
+            )
 
         # ----------------------------------------------------
         # Sort risk pairs
@@ -1035,6 +1147,18 @@ def main():
             frame_number,
             highest_risk,
             highest_score,
+            len(
+                live_alert_pipeline.alerts
+            ),
+        )
+
+        # ----------------------------------------------------
+        # Latest confirmed live alert
+        # ----------------------------------------------------
+
+        draw_live_alert_status(
+            frame,
+            latest_live_alert,
         )
 
         # ----------------------------------------------------
@@ -1098,12 +1222,44 @@ def main():
             break
 
     # --------------------------------------------------------
+    # Finalize live alert pipeline
+    # --------------------------------------------------------
+
+    final_alerts = (
+        live_alert_pipeline.finalize()
+    )
+
+    if final_alerts:
+
+        latest_live_alert = (
+            live_alert_pipeline.alerts[-1]
+        )
+
+        print_live_alert(
+            latest_live_alert
+        )
+
+    # --------------------------------------------------------
+    # Save live alerts
+    # --------------------------------------------------------
+
+    live_alert_output = (
+        live_alert_pipeline.save(
+            source_video=VIDEO_SOURCE
+        )
+    )
+
+    # --------------------------------------------------------
     # Cleanup
     # --------------------------------------------------------
 
     cap.release()
 
     cv2.destroyAllWindows()
+
+    statistics = (
+        live_alert_pipeline.statistics()
+    )
 
     print("")
     print("=" * 70)
@@ -1112,6 +1268,26 @@ def main():
     )
     print(
         f"Frames processed: {frame_number}"
+    )
+    print(
+        f"Confirmed live alerts: "
+        f"{statistics['total_alerts']}"
+    )
+    print(
+        f"Immediate alerts: "
+        f"{statistics['alert_counts']['IMMEDIATE_ALERT']}"
+    )
+    print(
+        f"Priority alerts: "
+        f"{statistics['alert_counts']['PRIORITY_ALERT']}"
+    )
+    print(
+        f"Monitor alerts: "
+        f"{statistics['alert_counts']['MONITOR']}"
+    )
+    print(
+        f"Live alert output: "
+        f"{live_alert_output}"
     )
     print("=" * 70)
 
