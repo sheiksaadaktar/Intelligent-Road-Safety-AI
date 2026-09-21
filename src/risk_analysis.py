@@ -8,99 +8,50 @@ from ultralytics import YOLO
 
 
 # ============================================================
-# CONFIGURATION
+# ============================================================
+# CENTRALIZED CONFIGURATION
 # ============================================================
 
-MODEL_PATH = "yolo11n.pt"
-VIDEO_PATH = "data/tracking_test.mp4"
+from safety_config import (
+    MODEL_PATH,
+    VIDEO_PATH,
 
+    MAX_RISK_DISTANCE,
+    CRITICAL_DISTANCE,
+    HIGH_DISTANCE,
+    MEDIUM_DISTANCE,
 
-# ============================================================
-# CURRENT DISTANCE
-# ============================================================
+    CRITICAL_PREDICTED_DISTANCE,
+    HIGH_PREDICTED_DISTANCE,
+    MEDIUM_PREDICTED_DISTANCE,
 
-MAX_RISK_DISTANCE = 320
+    MIN_APPROACH_SPEED,
+    HIGH_APPROACH_SPEED,
+    CRITICAL_APPROACH_SPEED,
 
-CRITICAL_DISTANCE = 100
-HIGH_DISTANCE = 170
-MEDIUM_DISTANCE = 260
+    CRITICAL_TCA,
+    HIGH_TCA,
+    MEDIUM_TCA,
+    MAX_TCA,
 
+    MIN_CONVERGENCE,
+    STRONG_CONVERGENCE,
 
-# ============================================================
-# PREDICTED CLOSEST DISTANCE
-# ============================================================
+    HISTORY_SIZE,
+    MAX_REASONABLE_VELOCITY,
+    MAX_REASONABLE_RELATIVE_VELOCITY,
 
-CRITICAL_PREDICTED_DISTANCE = 30
-HIGH_PREDICTED_DISTANCE = 70
-MEDIUM_PREDICTED_DISTANCE = 150
+    MIN_EVENT_FRAMES,
+    EVENT_GAP_TOLERANCE,
+    EVENT_SAFE_GAP_FRAMES,
 
-
-# ============================================================
-# APPROACH SPEED
-# ============================================================
-
-MIN_APPROACH_SPEED = 20
-HIGH_APPROACH_SPEED = 80
-CRITICAL_APPROACH_SPEED = 160
-
-
-# ============================================================
-# TIME TO CLOSEST APPROACH
-# ============================================================
-
-CRITICAL_TCA = 0.6
-HIGH_TCA = 1.2
-MEDIUM_TCA = 2.5
-MAX_TCA = 5.0
-
-
-# ============================================================
-# CONVERGENCE
-# ============================================================
-
-MIN_CONVERGENCE = 0.30
-STRONG_CONVERGENCE = 0.75
-
-
-# ============================================================
-# VELOCITY
-# ============================================================
-
-HISTORY_SIZE = 5
-
-MAX_REASONABLE_VELOCITY = 800
-MAX_REASONABLE_RELATIVE_VELOCITY = 1600
-
-
-# ============================================================
-# EVENT GROUPING
-# ============================================================
-
-MIN_EVENT_FRAMES = 5
-EVENT_GAP_TOLERANCE = 8
-
-# V5.2: end a risk episode after sustained LOW risk.
-# At ~59.94 FPS, 15 frames ~= 0.25 seconds.
-EVENT_SAFE_GAP_FRAMES = 15
-
-
-# ============================================================
-# V5.1 CONFIRMATION
-# ============================================================
-
-MIN_STRONG_OBSERVATIONS = 3
-
-STRONG_TCA_LIMIT = 1.5
-STRONG_PREDICTED_DISTANCE = 80
-STRONG_APPROACH_SPEED = 80
-
-# Prevent three strong observations from being counted when
-# they are all concentrated into one or two frames.
-MIN_STRONG_SPAN_FRAMES = 4
-
-# Strong observations must have some temporal separation.
-MIN_STRONG_FRAME_GAP = 2
-
+    MIN_STRONG_OBSERVATIONS,
+    STRONG_TCA_LIMIT,
+    STRONG_PREDICTED_DISTANCE,
+    STRONG_APPROACH_SPEED,
+    MIN_STRONG_SPAN_FRAMES,
+    MIN_STRONG_FRAME_GAP,
+)
 
 # ============================================================
 # HELPERS
@@ -1279,3 +1230,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
