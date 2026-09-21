@@ -1,7 +1,8 @@
-﻿import cv2
+import cv2
 import numpy as np
 
 from collections import defaultdict, deque
+from pathlib import Path
 
 from ultralytics import YOLO
 
@@ -20,30 +21,15 @@ from live_alert_pipeline import LiveAlertPipeline
 from live_incident_lifecycle import LiveIncidentLifecycle
 
 
-# ============================================================
-# REAL-TIME SAFETY MONITOR
-# ============================================================
-
 VIDEO_SOURCE = "data/tracking_test.mp4"
 
 WINDOW_NAME = (
     "Intelligent Road Safety AI - Real-Time Monitor"
 )
 
-
-# ============================================================
-# DISPLAY
-# ============================================================
-
 DISPLAY_WIDTH = 1280
 DISPLAY_HEIGHT = 720
-
 UI_SCALE = 1.45
-
-
-# ============================================================
-# RISK DISPLAY
-# ============================================================
 
 RISK_ORDER = {
     "LOW": 0,
@@ -53,137 +39,120 @@ RISK_ORDER = {
 }
 
 RISK_COLORS = {
-    "LOW": (180, 180, 180),
-    "MEDIUM": (0, 220, 255),
+    "LOW": (120, 120, 120),
+    "MEDIUM": (0, 180, 255),
     "HIGH": (0, 140, 255),
     "CRITICAL": (0, 0, 255),
 }
-
-
-# ============================================================
-# DISPLAY LIMITS
-# ============================================================
 
 MAX_DISPLAY_PAIRS = 5
 MAX_INCIDENT_HISTORY = 5
 
 
-# ============================================================
-# FORMAT HELPERS
-# ============================================================
+def format_tca(value):
+    if value is None:
+        return "N/A"
 
-def format_tca(tca):
+    if value >= 99:
+        return "N/A"
 
-    if np.isfinite(tca):
-        return f"{tca:.2f}s"
-
-    return "N/A"
+    return f"{value:.2f}s"
 
 
 def risk_color(risk):
-
     return RISK_COLORS.get(
         risk,
-        RISK_COLORS["LOW"],
+        (255, 255, 255),
     )
 
 
 def lifecycle_color(state):
-
     if state == "CONFIRMED":
-        return RISK_COLORS["HIGH"]
+        return (0, 255, 255)
 
     if state == "ACTIVE":
-        return RISK_COLORS["CRITICAL"]
+        return (0, 165, 255)
 
     if state == "RESOLVED":
-        return (150, 220, 150)
+        return (120, 255, 120)
 
-    return (180, 180, 180)
+    return (220, 220, 220)
 
-
-# ============================================================
-# DISPLAY SCALING
-# ============================================================
 
 def resize_for_display(frame):
-
-    frame_height, frame_width = frame.shape[:2]
-
-    if (
-        frame_width <= DISPLAY_WIDTH
-        and frame_height <= DISPLAY_HEIGHT
-    ):
-        return frame
-
-    scale_x = DISPLAY_WIDTH / frame_width
-    scale_y = DISPLAY_HEIGHT / frame_height
-
-    scale = min(
-        scale_x,
-        scale_y,
-    )
-
-    new_width = max(
-        1,
-        int(frame_width * scale),
-    )
-
-    new_height = max(
-        1,
-        int(frame_height * scale),
-    )
-
     return cv2.resize(
         frame,
         (
-            new_width,
-            new_height,
+            DISPLAY_WIDTH,
+            DISPLAY_HEIGHT,
         ),
         interpolation=cv2.INTER_AREA,
     )
 
 
-# ============================================================
-# LIVE ALERT CONSOLE
-# ============================================================
-
 def print_live_alert(alert):
 
     print("")
-    print("!" * 70)
+    print("=" * 70)
     print("CONFIRMED LIVE ROAD SAFETY ALERT")
-    print(f"Alert ID: {alert['alert_id']}")
-    print(
-        f"Objects: "
-        f"ID{alert['pair'][0]} <-> ID{alert['pair'][1]}"
-    )
-    print(f"Alert level: {alert['alert_level']}")
-    print(f"Priority: {alert['priority']}")
-    print(f"State: {alert['state']}")
-    print(f"Peak risk: {alert['risk']['peak_risk']}")
-    print(f"Peak score: {alert['risk']['peak_score']}")
+    print("=" * 70)
 
-    trajectory = alert["trajectory_evidence"]
+    print(
+        f"Alert ID: {alert['alert_id']}"
+    )
+
+    print(
+        f"Pair: ID{alert['pair'][0]} <-> "
+        f"ID{alert['pair'][1]}"
+    )
+
+    print(
+        f"Alert level: "
+        f"{alert['alert_level']}"
+    )
+
+    print(
+        f"Priority: "
+        f"{alert['priority']}"
+    )
+
+    print(
+        f"State: "
+        f"{alert['state']}"
+    )
+
+    print(
+        f"Risk: "
+        f"{alert['risk']['peak_risk']}"
+    )
+
+    print(
+        f"Score: "
+        f"{alert['risk']['peak_score']}"
+    )
+
+    trajectory = alert[
+        "trajectory_evidence"
+    ]
 
     print(
         f"Minimum distance: "
-        f"{trajectory['min_distance_pixels']:.2f} px"
+        f"{trajectory['min_distance_pixels']:.2f}px"
     )
 
     print(
         f"Minimum predicted distance: "
-        f"{trajectory['min_predicted_distance_pixels']:.2f} px"
+        f"{trajectory['min_predicted_distance_pixels']:.2f}px"
     )
 
     print(
         f"Maximum approach speed: "
-        f"{trajectory['max_approach_speed_pixels_per_second']:.2f} px/s"
+        f"{trajectory['max_approach_speed_pixels_per_second']:.2f}px/s"
     )
 
     print(
         f"Minimum TCA: "
-        f"{trajectory['min_tca_seconds']:.2f} s"
+        f"{trajectory['min_tca_seconds']:.2f}s"
     )
 
     print(
@@ -191,7 +160,9 @@ def print_live_alert(alert):
         f"{trajectory['max_convergence']:.2f}"
     )
 
-    confirmation = alert["confirmation"]
+    confirmation = alert[
+        "confirmation"
+    ]
 
     print(
         f"Strong observations: "
@@ -203,444 +174,393 @@ def print_live_alert(alert):
         f"{confirmation['strong_frames']}"
     )
 
-    print("!" * 70)
+    print("=" * 70)
 
-
-# ============================================================
-# DRAW HEADER
-# ============================================================
 
 def draw_header(
     frame,
     frame_number,
     highest_risk,
     highest_score,
-    live_alert_count,
-    incident_count,
-    active_incident_count,
+    alert_statistics,
+    lifecycle_statistics,
 ):
-
-    color = risk_color(
-        highest_risk
-    )
-
-    height, width = frame.shape[:2]
-
-    header_height = 115
 
     cv2.rectangle(
         frame,
         (0, 0),
         (
-            width,
-            header_height,
+            frame.shape[1],
+            int(88 * UI_SCALE),
         ),
-        (15, 15, 15),
+        (18, 18, 18),
         -1,
     )
 
     cv2.putText(
         frame,
         "INTELLIGENT ROAD SAFETY AI",
-        (25, 38),
+        (
+            int(22 * UI_SCALE),
+            int(31 * UI_SCALE),
+        ),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.95 * UI_SCALE,
+        0.75 * UI_SCALE,
         (255, 255, 255),
         2,
         cv2.LINE_AA,
     )
 
-    cv2.putText(
-        frame,
-        "REAL-TIME TRAJECTORY SAFETY MONITOR",
-        (25, 72),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.68 * UI_SCALE,
-        (210, 210, 210),
-        2,
-        cv2.LINE_AA,
+    header_line = (
+        f"Frame: {frame_number}   |   "
+        f"Highest: {highest_risk}   |   "
+        f"Score: {highest_score}   |   "
+        f"Live Alerts: "
+        f"{alert_statistics['total_alerts']}   |   "
+        f"Incidents: "
+        f"{lifecycle_statistics['total_incidents']}   |   "
+        f"Active: "
+        f"{lifecycle_statistics['state_counts']['ACTIVE']}"
     )
 
     cv2.putText(
         frame,
+        header_line,
         (
-            f"Frame: {frame_number}    "
-            f"Highest Risk: {highest_risk}    "
-            f"Score: {highest_score}    "
-            f"Alerts: {live_alert_count}    "
-            f"Incidents: {incident_count}    "
-            f"Active: {active_incident_count}"
+            int(22 * UI_SCALE),
+            int(66 * UI_SCALE),
         ),
-        (25, 103),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.48 * UI_SCALE,
-        color,
-        2,
+        0.43 * UI_SCALE,
+        (205, 205, 205),
+        1,
         cv2.LINE_AA,
     )
 
-
-# ============================================================
-# DRAW RISK PANEL
-# ============================================================
-
-def draw_risk_panel(
-    frame,
-    risk_pairs,
-):
-
-    height, width = frame.shape[:2]
-
-    panel_width = 530
-
-    panel_x = (
-        width
-        - panel_width
-        - 20
-    )
-
-    panel_y = 135
-
-    visible_pairs = risk_pairs[
-        :MAX_DISPLAY_PAIRS
-    ]
-
-    entry_height = 108
-
-    panel_height = (
-        65
-        + max(
-            1,
-            len(visible_pairs),
-        )
-        * entry_height
-        + 20
-    )
-
-    panel_height = min(
-        panel_height,
-        height - panel_y - 20,
-    )
-
-    overlay = frame.copy()
-
-    cv2.rectangle(
-        overlay,
-        (
-            panel_x,
-            panel_y,
-        ),
-        (
-            panel_x + panel_width,
-            panel_y + panel_height,
-        ),
-        (15, 15, 15),
-        -1,
-    )
-
-    cv2.addWeighted(
-        overlay,
-        0.84,
-        frame,
-        0.16,
-        0,
-        frame,
-    )
-
-    cv2.putText(
-        frame,
-        "CURRENT RISK PAIRS",
-        (
-            panel_x + 20,
-            panel_y + 38,
-        ),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.68 * UI_SCALE,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
-
-    if not visible_pairs:
-
-        cv2.putText(
-            frame,
-            "No active trajectory risk",
-            (
-                panel_x + 20,
-                panel_y + 85,
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.58 * UI_SCALE,
-            (180, 180, 180),
-            1,
-            cv2.LINE_AA,
-        )
-
-        return
-
-    for index, item in enumerate(
-        visible_pairs
-    ):
-
-        y = (
-            panel_y
-            + 72
-            + index * entry_height
-        )
-
-        risk = item["risk"]
-        score = item["score"]
-
-        id1 = item["id1"]
-        id2 = item["id2"]
-
-        metrics = item["metrics"]
-
-        color = risk_color(
-            risk
-        )
-
-        cv2.line(
-            frame,
-            (
-                panel_x + 15,
-                y - 10,
-            ),
-            (
-                panel_x + panel_width - 15,
-                y - 10,
-            ),
-            (80, 80, 80),
-            1,
-        )
-
-        cv2.putText(
-            frame,
-            (
-                f"{risk}   "
-                f"ID{id1} <-> ID{id2}   "
-                f"SCORE {score}"
-            ),
-            (
-                panel_x + 20,
-                y + 20,
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.58 * UI_SCALE,
-            color,
-            2,
-            cv2.LINE_AA,
-        )
-
-        cv2.putText(
-            frame,
-            (
-                f"Distance: "
-                f"{metrics['distance']:.1f}px    "
-                f"Predicted: "
-                f"{metrics['predicted_distance']:.1f}px"
-            ),
-            (
-                panel_x + 20,
-                y + 48,
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.47 * UI_SCALE,
-            (235, 235, 235),
-            1,
-            cv2.LINE_AA,
-        )
-
-        cv2.putText(
-            frame,
-            (
-                f"Approach: "
-                f"{metrics['approach_speed']:.1f}px/s    "
-                f"TCA: "
-                f"{format_tca(metrics['tca'])}"
-            ),
-            (
-                panel_x + 20,
-                y + 74,
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.47 * UI_SCALE,
-            (225, 225, 225),
-            1,
-            cv2.LINE_AA,
-        )
-
-        cv2.putText(
-            frame,
-            (
-                f"Convergence: "
-                f"{metrics['convergence']:.2f}"
-            ),
-            (
-                panel_x + 20,
-                y + 98,
-            ),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.44 * UI_SCALE,
-            (205, 205, 205),
-            1,
-            cv2.LINE_AA,
-        )
-
-
-# ============================================================
-# DRAW LIVE ALERT STATUS
-# ============================================================
 
 def draw_live_alert_status(
     frame,
     latest_alert,
 ):
 
-    if latest_alert is None:
-        return
-
-    alert_level = latest_alert["alert_level"]
-
-    if alert_level == "IMMEDIATE_ALERT":
-        color = RISK_COLORS["CRITICAL"]
-
-    elif alert_level == "PRIORITY_ALERT":
-        color = RISK_COLORS["HIGH"]
-
-    else:
-        color = RISK_COLORS["MEDIUM"]
-
-    box_width = 520
-    box_height = 82
-
     x = 20
-    y = 135
+    y = 105
 
-    overlay = frame.copy()
+    width = 520
+    height = 82
 
     cv2.rectangle(
-        overlay,
+        frame,
         (x, y),
-        (
-            x + box_width,
-            y + box_height,
-        ),
-        (10, 10, 10),
+        (x + width, y + height),
+        (24, 24, 24),
         -1,
     )
 
-    cv2.addWeighted(
-        overlay,
-        0.90,
-        frame,
-        0.10,
-        0,
-        frame,
-    )
-
     cv2.rectangle(
         frame,
         (x, y),
-        (
-            x + box_width,
-            y + box_height,
-        ),
-        color,
-        2,
+        (x + width, y + height),
+        (70, 70, 70),
+        1,
     )
 
     cv2.putText(
         frame,
-        (
-            f"{alert_level}  "
-            f"{latest_alert['alert_id']}"
-        ),
+        "LIVE ALERT STATUS",
         (
             x + 15,
-            y + 31,
+            y + 27,
         ),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.60 * UI_SCALE,
-        color,
-        2,
-        cv2.LINE_AA,
-    )
-
-    cv2.putText(
-        frame,
-        (
-            f"ID{latest_alert['pair'][0]} <-> "
-            f"ID{latest_alert['pair'][1]}   "
-            f"Score: {latest_alert['risk']['peak_score']}"
-        ),
-        (
-            x + 15,
-            y + 62,
-        ),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.48 * UI_SCALE,
-        (240, 240, 240),
+        0.47 * UI_SCALE,
+        (255, 255, 255),
         1,
         cv2.LINE_AA,
     )
 
+    if latest_alert is None:
 
-# ============================================================
-# DRAW INCIDENT HISTORY
-# ============================================================
+        cv2.putText(
+            frame,
+            "No confirmed alert yet",
+            (
+                x + 15,
+                y + 58,
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40 * UI_SCALE,
+            (160, 160, 160),
+            1,
+            cv2.LINE_AA,
+        )
+
+        return
+
+    pair = latest_alert["pair"]
+
+    risk = latest_alert[
+        "risk"
+    ]["peak_risk"]
+
+    text = (
+        f"{latest_alert['alert_id']}  "
+        f"ID{pair[0]} <-> ID{pair[1]}  "
+        f"{risk}  "
+        f"Score {latest_alert['risk']['peak_score']}"
+    )
+
+    cv2.putText(
+        frame,
+        text,
+        (
+            x + 15,
+            y + 58,
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.40 * UI_SCALE,
+        risk_color(risk),
+        2,
+        cv2.LINE_AA,
+    )
+
+
+def draw_safety_analytics(
+    frame,
+    incidents,
+    lifecycle_statistics,
+):
+
+    x = 20
+    y = 198
+
+    width = 520
+    height = 130
+
+    cv2.rectangle(
+        frame,
+        (x, y),
+        (x + width, y + height),
+        (20, 20, 20),
+        -1,
+    )
+
+    cv2.rectangle(
+        frame,
+        (x, y),
+        (x + width, y + height),
+        (65, 65, 65),
+        1,
+    )
+
+    cv2.putText(
+        frame,
+        "SAFETY ANALYTICS",
+        (
+            x + 15,
+            y + 27,
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48 * UI_SCALE,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    total = lifecycle_statistics[
+        "total_incidents"
+    ]
+
+    risk_counts = lifecycle_statistics[
+        "risk_counts"
+    ]
+
+    alert_counts = lifecycle_statistics[
+        "alert_level_counts"
+    ]
+
+    durations = []
+
+    distances = []
+
+    predicted_distances = []
+
+    for incident in incidents:
+
+        duration = incident.get(
+            "event_timing",
+            {},
+        ).get(
+            "duration_seconds"
+        )
+
+        if duration is not None:
+            durations.append(
+                float(duration)
+            )
+
+        trajectory = incident.get(
+            "trajectory_evidence",
+            {},
+        )
+
+        distance = trajectory.get(
+            "min_distance_pixels"
+        )
+
+        if distance is not None:
+            distances.append(
+                float(distance)
+            )
+
+        predicted = trajectory.get(
+            "min_predicted_distance_pixels"
+        )
+
+        if predicted is not None:
+            predicted_distances.append(
+                float(predicted)
+            )
+
+    if durations:
+
+        average_duration = (
+            sum(durations)
+            / len(durations)
+        )
+
+    else:
+
+        average_duration = 0.0
+
+    minimum_distance = (
+        min(distances)
+        if distances
+        else 0.0
+    )
+
+    minimum_predicted = (
+        min(predicted_distances)
+        if predicted_distances
+        else 0.0
+    )
+
+    object_involvement = (
+        lifecycle_statistics[
+            "object_involvement"
+        ]
+    )
+
+    top_objects = sorted(
+        object_involvement.items(),
+        key=lambda item: (
+            -item[1],
+            int(item[0]),
+        ),
+    )[:3]
+
+    line_one = (
+        f"Incidents: {total}    "
+        f"Critical: "
+        f"{risk_counts.get('CRITICAL', 0)}    "
+        f"High: "
+        f"{risk_counts.get('HIGH', 0)}"
+    )
+
+    line_two = (
+        f"Immediate: "
+        f"{alert_counts.get('IMMEDIATE_ALERT', 0)}    "
+        f"Priority: "
+        f"{alert_counts.get('PRIORITY_ALERT', 0)}"
+    )
+
+    line_three = (
+        f"Avg duration: "
+        f"{average_duration:.2f}s    "
+        f"Min distance: "
+        f"{minimum_distance:.2f}px"
+    )
+
+    line_four = (
+        f"Min predicted: "
+        f"{minimum_predicted:.2f}px    "
+        f"Most involved: "
+    )
+
+    if top_objects:
+
+        line_four += "  ".join(
+            f"ID{object_id}:{count}"
+            for object_id, count
+            in top_objects
+        )
+
+    else:
+
+        line_four += "None"
+
+    lines = [
+        line_one,
+        line_two,
+        line_three,
+        line_four,
+    ]
+
+    for index, line in enumerate(lines):
+
+        cv2.putText(
+            frame,
+            line,
+            (
+                x + 15,
+                y + 52 + index * 21,
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.36 * UI_SCALE,
+            (205, 205, 205),
+            1,
+            cv2.LINE_AA,
+        )
+
 
 def draw_incident_history(
     frame,
     incidents,
 ):
 
-    height, width = frame.shape[:2]
+    x = 20
+    y = 340
 
-    panel_width = 520
-
-    panel_x = 20
-    panel_y = 230
-
-    panel_height = 420
-
-    overlay = frame.copy()
+    width = 520
+    height = 350
 
     cv2.rectangle(
-        overlay,
-        (
-            panel_x,
-            panel_y,
-        ),
-        (
-            panel_x + panel_width,
-            panel_y + panel_height,
-        ),
-        (10, 10, 10),
+        frame,
+        (x, y),
+        (x + width, y + height),
+        (20, 20, 20),
         -1,
     )
 
-    cv2.addWeighted(
-        overlay,
-        0.88,
+    cv2.rectangle(
         frame,
-        0.12,
-        0,
-        frame,
+        (x, y),
+        (x + width, y + height),
+        (65, 65, 65),
+        1,
     )
 
     cv2.putText(
         frame,
         "INCIDENT HISTORY",
         (
-            panel_x + 18,
-            panel_y + 34,
+            x + 15,
+            y + 28,
         ),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.68 * UI_SCALE,
+        0.48 * UI_SCALE,
         (255, 255, 255),
-        2,
+        1,
         cv2.LINE_AA,
     )
 
@@ -648,170 +568,337 @@ def draw_incident_history(
 
         cv2.putText(
             frame,
-            "No confirmed incidents",
+            "No incidents recorded",
             (
-                panel_x + 18,
-                panel_y + 78,
+                x + 15,
+                y + 62,
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.55 * UI_SCALE,
-            (180, 180, 180),
+            0.40 * UI_SCALE,
+            (150, 150, 150),
             1,
             cv2.LINE_AA,
         )
 
         return
 
-    # Most recent incidents first.
-    visible_incidents = list(
+    recent_incidents = incidents[
+        -MAX_INCIDENT_HISTORY:
+    ]
+
+    recent_incidents = list(
         reversed(
-            incidents[-MAX_INCIDENT_HISTORY:]
+            recent_incidents
         )
     )
 
-    entry_height = 70
+    entry_height = 58
 
     for index, incident in enumerate(
-        visible_incidents
+        recent_incidents
     ):
 
-        y = (
-            panel_y
-            + 68
+        entry_y = (
+            y
+            + 50
             + index * entry_height
         )
 
-        lifecycle = incident[
+        state = incident[
             "lifecycle"
-        ]
+        ]["state"]
 
-        classification = incident[
+        risk = incident[
             "classification"
-        ]
+        ]["risk"]
 
-        objects = incident[
+        pair = incident[
             "objects"
-        ][
-            "pair"
-        ]
+        ]["pair"]
 
-        state = lifecycle[
-            "state"
-        ]
+        score = incident[
+            "classification"
+        ]["score"]
 
-        risk = classification[
-            "risk"
-        ]
-
-        score = classification[
-            "score"
-        ]
-
-        color = lifecycle_color(
-            state
+        duration = incident.get(
+            "event_timing",
+            {},
+        ).get(
+            "duration_seconds",
+            0.0,
         )
 
-        if index > 0:
-
-            cv2.line(
-                frame,
-                (
-                    panel_x + 15,
-                    y - 10,
-                ),
-                (
-                    panel_x + panel_width - 15,
-                    y - 10,
-                ),
-                (65, 65, 65),
-                1,
-            )
+        state_colour = lifecycle_color(
+            state
+        )
 
         cv2.putText(
             frame,
             (
                 f"{incident['incident_id']}   "
-                f"ID{objects[0]} <-> ID{objects[1]}"
+                f"ID{pair[0]} <-> ID{pair[1]}"
             ),
             (
-                panel_x + 18,
-                y + 18,
+                x + 15,
+                entry_y,
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.49 * UI_SCALE,
-            (240, 240, 240),
+            0.38 * UI_SCALE,
+            (235, 235, 235),
             1,
             cv2.LINE_AA,
         )
 
+        detail = (
+            f"{risk}   "
+            f"Score {score}   "
+            f"{state}   "
+            f"{duration:.2f}s"
+        )
+
         cv2.putText(
             frame,
+            detail,
             (
-                f"{risk}   "
-                f"Score {score}   "
-                f"{state}"
-            ),
-            (
-                panel_x + 18,
-                y + 45,
+                x + 15,
+                entry_y + 23,
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.46 * UI_SCALE,
-            color,
-            2,
+            0.34 * UI_SCALE,
+            state_colour,
+            1,
             cv2.LINE_AA,
         )
 
-        duration = incident[
-            "event_timing"
-        ][
-            "duration_seconds"
+        if index < len(
+            recent_incidents
+        ) - 1:
+
+            separator_y = (
+                entry_y + 34
+            )
+
+            cv2.line(
+                frame,
+                (
+                    x + 15,
+                    separator_y,
+                ),
+                (
+                    x + width - 15,
+                    separator_y,
+                ),
+                (45, 45, 45),
+                1,
+            )
+
+
+def draw_risk_panel(
+    frame,
+    risk_pairs,
+):
+
+    x = 710
+    y = 105
+
+    width = 550
+    height = 585
+
+    cv2.rectangle(
+        frame,
+        (x, y),
+        (x + width, y + height),
+        (20, 20, 20),
+        -1,
+    )
+
+    cv2.rectangle(
+        frame,
+        (x, y),
+        (x + width, y + height),
+        (65, 65, 65),
+        1,
+    )
+
+    cv2.putText(
+        frame,
+        "TRAJECTORY RISK MONITOR",
+        (
+            x + 15,
+            y + 28,
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48 * UI_SCALE,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+
+    if not risk_pairs:
+
+        cv2.putText(
+            frame,
+            "No active trajectory risks",
+            (
+                x + 15,
+                y + 60,
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.40 * UI_SCALE,
+            (150, 150, 150),
+            1,
+            cv2.LINE_AA,
+        )
+
+        return
+
+    risk_pairs = sorted(
+        risk_pairs,
+        key=lambda item: (
+            -RISK_ORDER.get(
+                item["risk"],
+                0,
+            ),
+            -item["score"],
+        ),
+    )
+
+    risk_pairs = risk_pairs[
+        :MAX_DISPLAY_PAIRS
+    ]
+
+    entry_height = 100
+
+    for index, item in enumerate(
+        risk_pairs
+    ):
+
+        entry_y = (
+            y
+            + 43
+            + index * entry_height
+        )
+
+        risk = item[
+            "risk"
+        ]
+
+        colour = risk_color(
+            risk
+        )
+
+        pair = item[
+            "pair"
+        ]
+
+        metrics = item[
+            "metrics"
         ]
 
         cv2.putText(
             frame,
             (
-                f"Duration: {duration:.2f}s"
+                f"{risk}   "
+                f"ID{pair[0]} <-> ID{pair[1]}   "
+                f"Score {item['score']}"
             ),
             (
-                panel_x + 300,
-                y + 45,
+                x + 15,
+                entry_y,
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.40 * UI_SCALE,
-            (200, 200, 200),
+            0.42 * UI_SCALE,
+            colour,
+            2,
+            cv2.LINE_AA,
+        )
+
+        line_one = (
+            f"D {metrics['distance']:.1f}px    "
+            f"Pred {metrics['predicted_distance']:.1f}px"
+        )
+
+        line_two = (
+            f"Approach "
+            f"{metrics['approach_speed']:.1f}px/s    "
+            f"TCA {format_tca(metrics['tca'])}"
+        )
+
+        line_three = (
+            f"Convergence "
+            f"{metrics['convergence']:.2f}"
+        )
+
+        cv2.putText(
+            frame,
+            line_one,
+            (
+                x + 15,
+                entry_y + 25,
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35 * UI_SCALE,
+            (205, 205, 205),
+            1,
+            cv2.LINE_AA,
+        )
+
+        cv2.putText(
+            frame,
+            line_two,
+            (
+                x + 15,
+                entry_y + 46,
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35 * UI_SCALE,
+            (205, 205, 205),
+            1,
+            cv2.LINE_AA,
+        )
+
+        cv2.putText(
+            frame,
+            line_three,
+            (
+                x + 15,
+                entry_y + 67,
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35 * UI_SCALE,
+            (205, 205, 205),
             1,
             cv2.LINE_AA,
         )
 
 
-# ============================================================
-# PRINT INCIDENT LIFECYCLE UPDATE
-# ============================================================
-
 def print_incident_update(
     incident,
-    transition,
+    message,
 ):
 
-    pair = incident["objects"]["pair"]
+    pair = incident[
+        "objects"
+    ]["pair"]
 
-    lifecycle = incident["lifecycle"]
+    classification = incident[
+        "classification"
+    ]
+
+    lifecycle = incident[
+        "lifecycle"
+    ]
 
     print("")
-    print("-" * 70)
-    print("LIVE INCIDENT LIFECYCLE UPDATE")
+    print(
+        f"INCIDENT {message}"
+    )
     print(
         f"Incident ID: "
         f"{incident['incident_id']}"
     )
     print(
-        f"Objects: "
-        f"ID{pair[0]} <-> ID{pair[1]}"
-    )
-    print(
-        f"Transition: "
-        f"{transition}"
+        f"Pair: ID{pair[0]} <-> ID{pair[1]}"
     )
     print(
         f"State: "
@@ -819,25 +906,15 @@ def print_incident_update(
     )
     print(
         f"Risk: "
-        f"{incident['classification']['risk']}"
+        f"{classification['risk']}"
     )
     print(
         f"Score: "
-        f"{incident['classification']['score']}"
+        f"{classification['score']}"
     )
-    print("-" * 70)
 
-
-# ============================================================
-# MAIN
-# ============================================================
 
 def main():
-
-    print("=" * 70)
-    print("INTELLIGENT ROAD SAFETY AI")
-    print("REAL-TIME SAFETY MONITOR")
-    print("=" * 70)
 
     print(
         f"Model: {MODEL_PATH}"
@@ -853,58 +930,42 @@ def main():
     )
 
     print(
-        f"UI scale: "
-        f"{UI_SCALE}"
-    )
-
-    print("")
-
-    # --------------------------------------------------------
-    # Load YOLO
-    # --------------------------------------------------------
-
-    print(
-        "Loading YOLO model..."
+        f"UI scale: {UI_SCALE}"
     )
 
     model = YOLO(
         MODEL_PATH
     )
 
-    # --------------------------------------------------------
-    # Open video source
-    # --------------------------------------------------------
-
-    cap = cv2.VideoCapture(
+    capture = cv2.VideoCapture(
         VIDEO_SOURCE
     )
 
-    if not cap.isOpened():
+    if not capture.isOpened():
 
-        print(
-            "ERROR: Could not open video source."
+        raise RuntimeError(
+            f"Could not open video: "
+            f"{VIDEO_SOURCE}"
         )
 
-        return
-
-    fps = cap.get(
-        cv2.CAP_PROP_FPS
-    )
-
-    if fps <= 0:
-        fps = 30.0
-
     source_width = int(
-        cap.get(
+        capture.get(
             cv2.CAP_PROP_FRAME_WIDTH
         )
     )
 
     source_height = int(
-        cap.get(
+        capture.get(
             cv2.CAP_PROP_FRAME_HEIGHT
         )
     )
+
+    fps = capture.get(
+        cv2.CAP_PROP_FPS
+    )
+
+    if fps <= 0:
+        fps = 30.0
 
     print(
         f"Source resolution: "
@@ -915,12 +976,16 @@ def main():
         f"Source FPS: {fps:.2f}"
     )
 
-    # --------------------------------------------------------
-    # Live alert pipeline
-    # --------------------------------------------------------
+    live_alert_pipeline = (
+        LiveAlertPipeline(
+            fps=fps
+        )
+    )
 
-    live_alert_pipeline = LiveAlertPipeline(
-        fps=fps
+    live_incident_lifecycle = (
+        LiveIncidentLifecycle(
+            fps=fps
+        )
     )
 
     print(
@@ -929,16 +994,6 @@ def main():
 
     print(
         "Temporal confirmation: ENABLED"
-    )
-
-    # --------------------------------------------------------
-    # Live incident lifecycle
-    # --------------------------------------------------------
-
-    live_incident_lifecycle = (
-        LiveIncidentLifecycle(
-            fps=fps
-        )
     )
 
     print(
@@ -950,71 +1005,38 @@ def main():
         "CONFIRMED -> ACTIVE -> RESOLVED"
     )
 
-    print("")
-
-    print(
-        "Starting real-time safety monitor..."
-    )
-
-    print(
-        "Press Q to stop."
-    )
-
-    print("")
-
-    # --------------------------------------------------------
-    # Tracking state
-    # --------------------------------------------------------
-
-    previous_positions = {}
-
     velocity_history = defaultdict(
         lambda: deque(
             maxlen=HISTORY_SIZE
         )
     )
 
+    position_history = defaultdict(
+        lambda: deque(
+            maxlen=HISTORY_SIZE
+        )
+    )
+
+    previous_positions = {}
+
     frame_number = 0
+    latest_alert = None
 
-    latest_live_alert = None
-
-    # --------------------------------------------------------
-    # Window setup
-    # --------------------------------------------------------
-
-    cv2.namedWindow(
-        WINDOW_NAME,
-        cv2.WINDOW_NORMAL,
-    )
-
-    cv2.resizeWindow(
-        WINDOW_NAME,
-        DISPLAY_WIDTH,
-        DISPLAY_HEIGHT,
-    )
-
-    # --------------------------------------------------------
-    # Main loop
-    # --------------------------------------------------------
+    frames_processed = 0
 
     while True:
 
-        success, frame = cap.read()
+        success, frame = capture.read()
 
         if not success:
-
-            print("")
-            print(
-                "Video source ended."
-            )
-
             break
 
         frame_number += 1
+        frames_processed += 1
 
-        # ----------------------------------------------------
-        # YOLO tracking
-        # ----------------------------------------------------
+        display_frame = resize_for_display(
+            frame
+        )
 
         results = model.track(
             frame,
@@ -1022,13 +1044,7 @@ def main():
             verbose=False,
         )
 
-        current_positions = {}
-
-        objects = {}
-
-        # ----------------------------------------------------
-        # Extract tracking results
-        # ----------------------------------------------------
+        detections = []
 
         if (
             results
@@ -1036,56 +1052,65 @@ def main():
             and results[0].boxes.id is not None
         ):
 
-            result = results[0]
-
             boxes = (
-                result.boxes.xyxy
-                .cpu()
-                .numpy()
+                results[0]
+                .boxes
             )
 
-            tracking_ids = (
-                result.boxes.id
+            track_ids = (
+                boxes.id
                 .int()
                 .cpu()
                 .tolist()
             )
 
             class_ids = (
-                result.boxes.cls
+                boxes.cls
                 .int()
                 .cpu()
                 .tolist()
             )
 
-            for box, track_id, class_id in zip(
-                boxes,
-                tracking_ids,
+            coordinates = (
+                boxes.xyxy
+                .cpu()
+                .numpy()
+            )
+
+            for (
+                track_id,
+                class_id,
+                box,
+            ) in zip(
+                track_ids,
                 class_ids,
+                coordinates,
             ):
 
-                position = bottom_center(
+                center = bottom_center(
                     box
                 )
 
-                current_positions[
+                position_history[
                     track_id
-                ] = position
-
-                # ------------------------------------------------
-                # Velocity
-                # ------------------------------------------------
+                ].append(
+                    center
+                )
 
                 if (
                     track_id
                     in previous_positions
                 ):
 
-                    displacement = (
-                        position
-                        - previous_positions[
+                    previous_position = (
+                        previous_positions[
                             track_id
                         ]
+                    )
+
+                    displacement = (
+                        center
+                        - previous_position
                     )
 
                     velocity = (
@@ -1093,9 +1118,11 @@ def main():
                         * fps
                     )
 
-                    velocity_magnitude = float(
-                        np.linalg.norm(
-                            velocity
+                    velocity_magnitude = (
+                        float(
+                            np.linalg.norm(
+                                velocity
+                            )
                         )
                     )
 
@@ -1112,66 +1139,79 @@ def main():
 
                 previous_positions[
                     track_id
-                ] = position
+                ] = center
 
-                objects[
-                    track_id
-                ] = {
-                    "box": box,
-                    "position": position,
-                    "class": result.names[
-                        class_id
-                    ],
-                }
+                smoothed_velocity = (
+                    smooth_velocity(
+                        velocity_history[
+                            track_id
+                        ]
+                    )
+                )
 
-        # ----------------------------------------------------
-        # Calculate pairwise trajectory risk
-        # ----------------------------------------------------
+                detections.append(
+                    {
+                        "id": track_id,
+                        "class_id": class_id,
+                        "box": box,
+                        "position": center,
+                        "velocity": (
+                            smoothed_velocity
+                        ),
+                    }
+                )
 
         risk_pairs = []
-
         observed_pairs = set()
 
         highest_risk = "LOW"
         highest_score = 0
 
-        ids = sorted(
-            current_positions.keys()
-        )
-
-        for index, id1 in enumerate(
-            ids
+        for i in range(
+            len(detections)
         ):
 
-            if not velocity_history[
-                id1
-            ]:
-                continue
+            for j in range(
+                i + 1,
+                len(detections),
+            ):
 
-            velocity_1 = smooth_velocity(
-                velocity_history[id1]
-            )
+                first = detections[i]
+                second = detections[j]
 
-            for id2 in ids[
-                index + 1:
-            ]:
-
-                if not velocity_history[
-                    id2
-                ]:
+                if (
+                    first["id"]
+                    not in velocity_history
+                    or second["id"]
+                    not in velocity_history
+                ):
                     continue
 
-                velocity_2 = smooth_velocity(
-                    velocity_history[id2]
+                velocity_one = (
+                    smooth_velocity(
+                        velocity_history[
+                            first["id"]
+                        ]
+                    )
                 )
 
-                # ------------------------------------------------
-                # Relative velocity sanity check
-                # ------------------------------------------------
+                velocity_two = (
+                    smooth_velocity(
+                        velocity_history[
+                            second["id"]
+                        ]
+                    )
+                )
+
+                if (
+                    velocity_one is None
+                    or velocity_two is None
+                ):
+                    continue
 
                 relative_velocity = (
-                    velocity_2
-                    - velocity_1
+                    velocity_two
+                    - velocity_one
                 )
 
                 relative_speed = float(
@@ -1186,78 +1226,65 @@ def main():
                 ):
                     continue
 
-                pair = tuple(
-                    sorted(
-                        (
-                            id1,
-                            id2,
-                        )
+                metrics = (
+                    calculate_trajectory_metrics(
+                        first["position"],
+                        velocity_one,
+                        second["position"],
+                        velocity_two,
                     )
+                )
+
+                risk, score = (
+                    calculate_risk(
+                        metrics
+                    )
+                )
+
+                pair = (
+                    first["id"],
+                    second["id"],
+                )
+
+                normalized_pair = tuple(
+                    sorted(pair)
                 )
 
                 observed_pairs.add(
-                    pair
+                    normalized_pair
                 )
 
-                # ------------------------------------------------
-                # Shared trajectory model
-                # ------------------------------------------------
-
-                metrics = (
-                    calculate_trajectory_metrics(
-                        current_positions[id1],
-                        velocity_1,
-                        current_positions[id2],
-                        velocity_2,
+                live_alert_generated = (
+                    live_alert_pipeline.observe(
+                        frame_number=frame_number,
+                        pair=pair,
+                        risk=risk,
+                        score=score,
+                        metrics=metrics,
                     )
                 )
 
-                risk, score = calculate_risk(
-                    metrics
-                )
+                if live_alert_generated:
 
-                # ------------------------------------------------
-                # Temporal live alert pipeline
-                # ------------------------------------------------
-
-                alert_count_before = len(
-                    live_alert_pipeline.alerts
-                )
-
-                live_alert_pipeline.observe(
-                    frame_number=frame_number,
-                    pair=pair,
-                    risk=risk,
-                    score=score,
-                    metrics=metrics,
-                )
-
-                alert_count_after = len(
-                    live_alert_pipeline.alerts
-                )
-
-                if (
-                    alert_count_after
-                    > alert_count_before
-                ):
-
-                    latest_live_alert = (
-                        live_alert_pipeline.alerts[-1]
+                    latest_alert = (
+                        live_alert_pipeline.alerts[
+                            -1
+                        ]
                     )
 
                     print_live_alert(
-                        latest_live_alert
+                        latest_alert
                     )
 
-                # ------------------------------------------------
-                # Highest risk
-                # ------------------------------------------------
-
                 if (
-                    RISK_ORDER[risk]
-                    > RISK_ORDER[
-                        highest_risk
-                    ]
+                    RISK_ORDER.get(
+                        risk,
+                        0,
+                    )
+                    > RISK_ORDER.get(
+                        highest_risk,
+                        0,
+                    )
                 ):
 
                     highest_risk = risk
@@ -1270,52 +1297,70 @@ def main():
 
                     highest_score = score
 
-                # ------------------------------------------------
-                # Keep risk pairs for display
-                # ------------------------------------------------
-
                 if risk != "LOW":
 
                     risk_pairs.append(
                         {
-                            "id1": id1,
-                            "id2": id2,
+                            "pair": pair,
                             "risk": risk,
                             "score": score,
                             "metrics": metrics,
-                            "position_1": (
-                                current_positions[id1]
-                            ),
-                            "position_2": (
-                                current_positions[id2]
-                            ),
                         }
                     )
 
-        # ----------------------------------------------------
-        # Inform temporal engine about missing pairs
-        # ----------------------------------------------------
+                point_one = (
+                    first["position"]
+                )
 
-        completed_alerts = (
-            live_alert_pipeline.mark_missing_pairs(
-                frame_number=frame_number,
-                observed_pairs=observed_pairs,
-            )
+                point_two = (
+                    second["position"]
+                )
+
+                scale_x = (
+                    DISPLAY_WIDTH
+                    / source_width
+                )
+
+                scale_y = (
+                    DISPLAY_HEIGHT
+                    / source_height
+                )
+
+                p1 = (
+                    int(
+                        point_one[0]
+                        * scale_x
+                    ),
+                    int(
+                        point_one[1]
+                        * scale_y
+                    ),
+                )
+
+                p2 = (
+                    int(
+                        point_two[0]
+                        * scale_x
+                    ),
+                    int(
+                        point_two[1]
+                        * scale_y
+                    ),
+                )
+
+                cv2.line(
+                    display_frame,
+                    p1,
+                    p2,
+                    risk_color(risk),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+        live_alert_pipeline.mark_missing_pairs(
+            frame_number,
+            observed_pairs,
         )
-
-        if completed_alerts:
-
-            latest_live_alert = (
-                live_alert_pipeline.alerts[-1]
-            )
-
-            print_live_alert(
-                latest_live_alert
-            )
-
-        # ----------------------------------------------------
-        # Synchronize live incident lifecycle
-        # ----------------------------------------------------
 
         active_events = (
             live_alert_pipeline
@@ -1330,15 +1375,20 @@ def main():
         )
 
         previous_incident_count = len(
-            live_incident_lifecycle.incidents
+            live_incident_lifecycle
+            .incidents
         )
 
         previous_active_count = len(
-            live_incident_lifecycle.active_incidents()
+            live_incident_lifecycle
+            .active_incidents()
         )
 
         live_incident_lifecycle.process_alerts(
-            alerts=live_alert_pipeline.alerts,
+            alerts=(
+                live_alert_pipeline
+                .alerts
+            ),
             active_events=active_events,
             frame_number=frame_number,
         )
@@ -1349,311 +1399,181 @@ def main():
         )
 
         current_incident_count = len(
-            live_incident_lifecycle.incidents
+            live_incident_lifecycle
+            .incidents
         )
 
         current_active_count = len(
-            live_incident_lifecycle.active_incidents()
+            live_incident_lifecycle
+            .active_incidents()
         )
-
-        # ----------------------------------------------------
-        # Print lifecycle transitions
-        # ----------------------------------------------------
 
         if (
             current_incident_count
             > previous_incident_count
+            or current_active_count
+            > previous_active_count
         ):
 
-            new_incidents = (
-                live_incident_lifecycle.incidents[
-                    previous_incident_count:
-                ]
-            )
+            if current_incident_count:
 
-            for incident in new_incidents:
-
-                print_incident_update(
-                    incident,
-                    "NEW CONFIRMED INCIDENT",
+                latest_incident = (
+                    live_incident_lifecycle
+                    .incidents[-1]
                 )
 
-        if (
-            current_active_count
-            > previous_active_count
-            and current_incident_count
-            == previous_incident_count
-        ):
+                print_incident_update(
+                    latest_incident,
+                    "UPDATE",
+                )
 
-            active_incidents = (
-                live_incident_lifecycle
-                .active_incidents()
+        for detection in detections:
+
+            box = detection[
+                "box"
+            ]
+
+            track_id = detection[
+                "id"
+            ]
+
+            x1, y1, x2, y2 = (
+                box.astype(int)
             )
 
-            if active_incidents:
+            scale_x = (
+                DISPLAY_WIDTH
+                / source_width
+            )
 
-                incident = active_incidents[-1]
+            scale_y = (
+                DISPLAY_HEIGHT
+                / source_height
+            )
 
-                if (
-                    incident["lifecycle"]["state"]
-                    == "ACTIVE"
-                ):
+            dx1 = int(
+                x1 * scale_x
+            )
 
-                    print_incident_update(
-                        incident,
-                        "INCIDENT ACTIVE",
-                    )
+            dy1 = int(
+                y1 * scale_y
+            )
 
-        # ----------------------------------------------------
-        # Sort risk pairs
-        # ----------------------------------------------------
+            dx2 = int(
+                x2 * scale_x
+            )
 
-        risk_pairs.sort(
-            key=lambda item: (
-                RISK_ORDER[
-                    item["risk"]
-                ],
-                item["score"],
-            ),
-            reverse=True,
-        )
-
-        # ----------------------------------------------------
-        # Draw object boxes
-        # ----------------------------------------------------
-
-        for track_id, obj in objects.items():
-
-            x1, y1, x2, y2 = map(
-                int,
-                obj["box"],
+            dy2 = int(
+                y2 * scale_y
             )
 
             cv2.rectangle(
-                frame,
-                (x1, y1),
-                (x2, y2),
-                (255, 255, 255),
+                display_frame,
+                (
+                    dx1,
+                    dy1,
+                ),
+                (
+                    dx2,
+                    dy2,
+                ),
+                (80, 220, 80),
                 2,
             )
 
+            label = (
+                f"ID {track_id}"
+            )
+
             cv2.putText(
-                frame,
+                display_frame,
+                label,
                 (
-                    f"ID {track_id} "
-                    f"{obj['class']}"
-                ),
-                (
-                    x1,
+                    dx1,
                     max(
-                        120,
-                        y1 - 8,
+                        20,
+                        dy1 - 8,
                     ),
                 ),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.68 * UI_SCALE,
-                (255, 255, 255),
+                0.50 * UI_SCALE,
+                (80, 220, 80),
                 2,
                 cv2.LINE_AA,
             )
 
-        # ----------------------------------------------------
-        # Draw trajectory lines
-        # ----------------------------------------------------
-
-        for item in risk_pairs:
-
-            risk = item["risk"]
-
-            position_1 = item[
-                "position_1"
-            ]
-
-            position_2 = item[
-                "position_2"
-            ]
-
-            color = risk_color(
-                risk
-            )
-
-            point_1 = (
-                int(position_1[0]),
-                int(position_1[1]),
-            )
-
-            point_2 = (
-                int(position_2[0]),
-                int(position_2[1]),
-            )
-
-            cv2.line(
-                frame,
-                point_1,
-                point_2,
-                color,
-                3,
-            )
-
-            midpoint = (
-                int(
-                    (
-                        position_1[0]
-                        + position_2[0]
-                    )
-                    / 2
-                ),
-                int(
-                    (
-                        position_1[1]
-                        + position_2[1]
-                    )
-                    / 2
-                ),
-            )
-
-            cv2.circle(
-                frame,
-                midpoint,
-                7,
-                color,
-                -1,
-            )
-
-        # ----------------------------------------------------
-        # Header
-        # ----------------------------------------------------
-
-        lifecycle_statistics = (
-            live_incident_lifecycle.statistics()
+        alert_statistics = (
+            live_alert_pipeline
+            .statistics()
         )
 
-        active_incident_count = (
-            lifecycle_statistics[
-                "state_counts"
-            ][
-                "CONFIRMED"
-            ]
-            + lifecycle_statistics[
-                "state_counts"
-            ][
-                "ACTIVE"
-            ]
+        lifecycle_statistics = (
+            live_incident_lifecycle
+            .statistics()
         )
 
         draw_header(
-            frame,
+            display_frame,
             frame_number,
             highest_risk,
             highest_score,
-            len(
-                live_alert_pipeline.alerts
-            ),
-            lifecycle_statistics[
-                "total_incidents"
-            ],
-            active_incident_count,
+            alert_statistics,
+            lifecycle_statistics,
         )
-
-        # ----------------------------------------------------
-        # Latest confirmed live alert
-        # ----------------------------------------------------
 
         draw_live_alert_status(
-            frame,
-            latest_live_alert,
+            display_frame,
+            latest_alert,
         )
 
-        # ----------------------------------------------------
-        # Incident history
-        # ----------------------------------------------------
+        draw_safety_analytics(
+            display_frame,
+            live_incident_lifecycle.incidents,
+            lifecycle_statistics,
+        )
 
         draw_incident_history(
-            frame,
+            display_frame,
             live_incident_lifecycle.incidents,
         )
 
-        # ----------------------------------------------------
-        # Risk panel
-        # ----------------------------------------------------
-
         draw_risk_panel(
-            frame,
+            display_frame,
             risk_pairs,
         )
 
-        # ----------------------------------------------------
-        # Controls
-        # ----------------------------------------------------
-
         cv2.putText(
-            frame,
+            display_frame,
             "Press Q to stop",
             (
-                20,
-                frame.shape[0] - 20,
+                int(20 * UI_SCALE),
+                DISPLAY_HEIGHT
+                - int(18 * UI_SCALE),
             ),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.60 * UI_SCALE,
-            (210, 210, 210),
+            0.38 * UI_SCALE,
+            (170, 170, 170),
             1,
             cv2.LINE_AA,
         )
-
-        # ----------------------------------------------------
-        # Resize ONLY for display
-        # ----------------------------------------------------
-
-        display_frame = resize_for_display(
-            frame
-        )
-
-        # ----------------------------------------------------
-        # Display
-        # ----------------------------------------------------
 
         cv2.imshow(
             WINDOW_NAME,
             display_frame,
         )
 
-        key = cv2.waitKey(
-            1
-        ) & 0xFF
+        key = (
+            cv2.waitKey(1)
+            & 0xFF
+        )
 
-        if key in (
-            ord("q"),
-            ord("Q"),
-        ):
-
-            print("")
-            print(
-                "Monitor stopped by user."
-            )
-
+        if key == ord("q"):
             break
 
-    # ========================================================
-    # FINALIZE LIVE ALERT PIPELINE
-    # ========================================================
+    capture.release()
+    cv2.destroyAllWindows()
 
-    final_alerts = (
-        live_alert_pipeline.finalize()
-    )
-
-    if final_alerts:
-
-        latest_live_alert = (
-            live_alert_pipeline.alerts[-1]
-        )
-
-        print_live_alert(
-            latest_live_alert
-        )
-
-    # ========================================================
-    # FINALIZE LIVE INCIDENT LIFECYCLE
-    # ========================================================
+    live_alert_pipeline.finalize()
 
     live_incident_lifecycle.resolve_completed_events(
         completed_events=(
@@ -1668,101 +1588,80 @@ def main():
         frame_number=frame_number,
     )
 
-    # ========================================================
-    # SAVE LIVE ALERTS
-    # ========================================================
-
-    live_alert_output = (
-        live_alert_pipeline.save(
-            source_video=VIDEO_SOURCE
-        )
+    live_alert_pipeline.save(
+        source_video=VIDEO_SOURCE
     )
 
-    # ========================================================
-    # SAVE LIVE INCIDENTS
-    # ========================================================
-
-    live_incident_output = (
-        live_incident_lifecycle.save(
-            source_video=VIDEO_SOURCE
-        )
-    )
-
-    # ========================================================
-    # CLEANUP
-    # ========================================================
-
-    cap.release()
-
-    cv2.destroyAllWindows()
-
-    alert_statistics = (
-        live_alert_pipeline.statistics()
-    )
-
-    lifecycle_statistics = (
-        live_incident_lifecycle.statistics()
+    live_incident_lifecycle.save(
+        source_video=VIDEO_SOURCE
     )
 
     print("")
     print("=" * 70)
-    print(
-        "REAL-TIME SAFETY MONITOR COMPLETE"
-    )
+    print("REAL-TIME SAFETY MONITOR SUMMARY")
+    print("=" * 70)
 
     print(
         f"Frames processed: "
-        f"{frame_number}"
+        f"{frames_processed}"
+    )
+
+    final_alert_statistics = (
+        live_alert_pipeline.statistics()
+    )
+
+    final_lifecycle_statistics = (
+        live_incident_lifecycle.statistics()
     )
 
     print(
         f"Confirmed live alerts: "
-        f"{alert_statistics['total_alerts']}"
+        f"{final_alert_statistics['total_alerts']}"
     )
 
     print(
         f"Immediate alerts: "
-        f"{alert_statistics['alert_counts']['IMMEDIATE_ALERT']}"
+        f"{final_alert_statistics['alert_counts']['IMMEDIATE_ALERT']}"
     )
 
     print(
         f"Priority alerts: "
-        f"{alert_statistics['alert_counts']['PRIORITY_ALERT']}"
+        f"{final_alert_statistics['alert_counts']['PRIORITY_ALERT']}"
     )
 
     print(
         f"Monitor alerts: "
-        f"{alert_statistics['alert_counts']['MONITOR']}"
+        f"{final_alert_statistics['alert_counts']['MONITOR']}"
     )
 
     print(
         f"Live incidents: "
-        f"{lifecycle_statistics['total_incidents']}"
+        f"{final_lifecycle_statistics['total_incidents']}"
     )
 
     print(
         f"Confirmed incidents: "
-        f"{lifecycle_statistics['state_counts']['CONFIRMED']}"
+        f"{final_lifecycle_statistics['state_counts']['CONFIRMED']}"
     )
 
     print(
         f"Active incidents: "
-        f"{lifecycle_statistics['state_counts']['ACTIVE']}"
+        f"{final_lifecycle_statistics['state_counts']['ACTIVE']}"
     )
 
     print(
         f"Resolved incidents: "
-        f"{lifecycle_statistics['state_counts']['RESOLVED']}"
+        f"{final_lifecycle_statistics['state_counts']['RESOLVED']}"
     )
 
     print(
-        f"Live alert output: "
-        f"{live_alert_output}"
+        "Live alert output: "
+        "output\\live_alerts.json"
     )
 
     print(
-        f"Live incident output: "
-        f"{live_incident_output}"
+        "Live incident output: "
+        "output\\live_incidents.json"
     )
 
     print("=" * 70)
