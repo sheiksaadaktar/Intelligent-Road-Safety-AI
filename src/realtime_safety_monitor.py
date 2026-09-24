@@ -1,4 +1,5 @@
-import cv2
+﻿import cv2
+import time
 import numpy as np
 
 from collections import defaultdict, deque
@@ -19,6 +20,7 @@ from risk_analysis import (
 
 from live_alert_pipeline import LiveAlertPipeline
 from live_incident_lifecycle import LiveIncidentLifecycle
+from runtime_health import RuntimeHealth
 
 
 VIDEO_SOURCE = "data/tracking_test.mp4"
@@ -916,6 +918,8 @@ def print_incident_update(
 
 def main():
 
+    runtime_health = RuntimeHealth()
+
     print(
         f"Model: {MODEL_PATH}"
     )
@@ -939,6 +943,10 @@ def main():
 
     capture = cv2.VideoCapture(
         VIDEO_SOURCE
+    )
+
+    runtime_health.mark_source_opened(
+        capture.isOpened()
     )
 
     if not capture.isOpened():
@@ -1026,10 +1034,16 @@ def main():
 
     while True:
 
+        frame_start_time = time.perf_counter()
+
         success, frame = capture.read()
 
         if not success:
             break
+
+        runtime_health.record_frame_read(
+            True
+        )
 
         frame_number += 1
         frames_processed += 1
@@ -1160,6 +1174,10 @@ def main():
                         ),
                     }
                 )
+
+        runtime_health.record_frame_processed(
+            has_detections=bool(detections)
+        )
 
         risk_pairs = []
         observed_pairs = set()
@@ -1570,6 +1588,11 @@ def main():
         if key == ord("q"):
             break
 
+        runtime_health.record_processing_time(
+            time.perf_counter()
+            - frame_start_time
+        )
+
     capture.release()
     cv2.destroyAllWindows()
 
@@ -1613,6 +1636,29 @@ def main():
     final_lifecycle_statistics = (
         live_incident_lifecycle.statistics()
     )
+
+    runtime_health.update_alert_count(
+        final_alert_statistics[
+            "total_alerts"
+        ]
+    )
+
+    runtime_health.update_incident_counts(
+        total_incidents=(
+            final_lifecycle_statistics[
+                "total_incidents"
+            ]
+        ),
+        resolved_incidents=(
+            final_lifecycle_statistics[
+                "state_counts"
+            ][
+                "RESOLVED"
+            ]
+        ),
+    )
+
+    runtime_health.finish()
 
     print(
         f"Confirmed live alerts: "
@@ -1664,8 +1710,77 @@ def main():
         "output\\live_incidents.json"
     )
 
+    health_summary = (
+        runtime_health.summary()
+    )
+
+    print("")
+    print("-" * 70)
+    print("RUNTIME HEALTH SUMMARY")
+    print("-" * 70)
+
+    print(
+        f"Runtime state: "
+        f"{health_summary['state']}"
+    )
+
+    print(
+        f"Source opened: "
+        f"{health_summary['source_opened']}"
+    )
+
+    print(
+        f"Frames read: "
+        f"{health_summary['frames_read']}"
+    )
+
+    print(
+        f"Frame read failures: "
+        f"{health_summary['frame_read_failures']}"
+    )
+
+    print(
+        f"Frames with detections: "
+        f"{health_summary['frames_with_detections']}"
+    )
+
+    print(
+        f"Detection rate: "
+        f"{health_summary['detection_rate_percent']:.2f}%"
+    )
+
+    print(
+        f"Average processing FPS: "
+        f"{health_summary['average_processing_fps']:.2f}"
+    )
+
+    print(
+        f"Confirmed alerts tracked: "
+        f"{health_summary['confirmed_alerts']}"
+    )
+
+    print(
+        f"Total incidents tracked: "
+        f"{health_summary['total_incidents']}"
+    )
+
+    print(
+        f"Resolved incidents tracked: "
+        f"{health_summary['resolved_incidents']}"
+    )
+
+    print(
+        f"Runtime elapsed: "
+        f"{health_summary['elapsed_seconds']:.2f}s"
+    )
+
+    print("-" * 70)
+
     print("=" * 70)
 
 
 if __name__ == "__main__":
     main()
+
+
+
