@@ -24,3 +24,23 @@ results/
 
 # IDE/editor files
 .vscode/
+# Generated output directories
+outputs/
+
+# OpenVINO exported models
+*_openvino_model/
+
+# Temporary logs and experiment outputs
+*.log
+kernel.errors.txt
+risk_events*.txt
+risk_output*.txt
+v*_diff.txt
+
+# Experimental patch scripts
+apply_v*_patch.py
+patch_v*_events.py
+
+# Backup and before-fix scripts
+src/*_backup.py
+src/*_before_*.py
